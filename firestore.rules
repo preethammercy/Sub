@@ -1,0 +1,147 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Global Safety Net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null && request.auth.token.email_verified == true;
+    }
+
+    function isAdmin() {
+      return isSignedIn() && (
+        request.auth.token.email == 'santoshmetihubli@gmail.com' ||
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid))
+      );
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isValidUserProfile(data, userId) {
+      return data.keys().hasAll(['uid', 'displayName', 'createdAt']) &&
+        data.keys().hasOnly(['uid', 'displayName', 'photoUrl', 'createdAt']) &&
+        data.uid == userId &&
+        data.uid is string && data.uid.size() >= 1 && data.uid.size() <= 128 &&
+        data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 120 &&
+        (!('photoUrl' in data) || (data.photoUrl is string && data.photoUrl.size() <= 512)) &&
+        data.createdAt is timestamp;
+    }
+
+    function isValidUserPrivate(data, userId) {
+      return data.keys().hasAll(['uid', 'email', 'updatedAt']) &&
+        data.keys().hasOnly(['uid', 'email', 'updatedAt']) &&
+        data.uid == userId &&
+        data.uid is string && data.uid.size() >= 1 && data.uid.size() <= 128 &&
+        data.email is string && data.email.size() >= 3 && data.email.size() <= 254 &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidProduct(data, productId) {
+      return data.keys().hasAll(['id', 'name', 'category', 'splitPriceInr', 'retailPriceInr', 'availableSlots', 'active']) &&
+        data.keys().hasOnly(['id', 'name', 'category', 'splitPriceInr', 'retailPriceInr', 'availableSlots', 'active']) &&
+        data.id == productId &&
+        data.id is string && data.id.size() >= 1 && data.id.size() <= 128 &&
+        data.name is string && data.name.size() >= 1 && data.name.size() <= 120 &&
+        data.category in ['Streaming', 'AI & Tools', 'Music', 'Productivity', 'Security'] &&
+        data.splitPriceInr is int && data.splitPriceInr > 0 &&
+        data.retailPriceInr is int && data.retailPriceInr > 0 &&
+        data.availableSlots is int && data.availableSlots >= 0 &&
+        data.active is bool;
+    }
+
+    function isValidOrder(data, orderId) {
+      return data.keys().hasAll(['id', 'userId', 'productId', 'amountInr', 'upiId', 'status', 'createdAt']) &&
+        data.keys().hasOnly(['id', 'userId', 'productId', 'amountInr', 'upiId', 'utrNumber', 'status', 'createdAt']) &&
+        data.id == orderId &&
+        data.id is string && data.id.size() >= 1 && data.id.size() <= 128 &&
+        data.userId is string && data.userId.size() >= 1 && data.userId.size() <= 128 &&
+        data.productId is string && data.productId.size() >= 1 && data.productId.size() <= 128 &&
+        data.amountInr is int && data.amountInr > 0 &&
+        data.upiId is string && data.upiId.size() >= 3 && data.upiId.size() <= 128 &&
+        (!('utrNumber' in data) || (data.utrNumber is string && data.utrNumber.size() >= 8 && data.utrNumber.size() <= 32)) &&
+        data.status in ['awaiting_payment', 'pending_approval', 'approved', 'rejected', 'expired'] &&
+        data.createdAt is timestamp;
+    }
+
+    // Connection test path (read-only)
+    match /test/connection {
+      allow get: if true;
+    }
+
+    match /admins/{adminUid} {
+      allow get: if isValidId(adminUid) && isOwner(adminUid);
+      allow list, create, update, delete: if false;
+    }
+
+    match /users/{userId} {
+      allow get: if isValidId(userId) && (isOwner(userId) || isAdmin());
+      allow list: if isAdmin();
+      allow create: if isValidId(userId) && isOwner(userId) && isValidUserProfile(incoming(), userId) && incoming().createdAt == request.time;
+      allow update: if isValidId(userId) && isOwner(userId) && isValidUserProfile(incoming(), userId) &&
+        incoming().uid == existing().uid &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'photoUrl']);
+      allow delete: if false;
+
+      match /private/{docId} {
+        allow get: if isValidId(userId) && isValidId(docId) && (isOwner(userId) || isAdmin());
+        allow list: if false;
+        allow create: if isValidId(userId) && isValidId(docId) && isOwner(userId) && isValidUserPrivate(incoming(), userId) && incoming().updatedAt == request.time;
+        allow update: if isValidId(userId) && isValidId(docId) && isOwner(userId) && isValidUserPrivate(incoming(), userId) &&
+          incoming().uid == existing().uid &&
+          incoming().updatedAt == request.time &&
+          incoming().diff(existing()).affectedKeys().hasOnly(['email', 'updatedAt']);
+        allow delete: if false;
+      }
+    }
+
+    match /products/{productId} {
+      allow get: if isValidId(productId);
+      allow list: if true;
+      allow create: if isValidId(productId) && isAdmin() && isValidProduct(incoming(), productId);
+      allow update: if isValidId(productId) && isAdmin() && isValidProduct(incoming(), productId) && incoming().id == existing().id;
+      allow delete: if isValidId(productId) && isAdmin();
+    }
+
+    match /orders/{orderId} {
+      allow get: if isValidId(orderId) && (isAdmin() || (isSignedIn() && resource.data.userId == request.auth.uid));
+      allow list: if isAdmin() || (isSignedIn() && resource.data.userId == request.auth.uid);
+      allow create: if isValidId(orderId) && isSignedIn() &&
+        isValidOrder(incoming(), orderId) &&
+        incoming().userId == request.auth.uid &&
+        incoming().status == 'awaiting_payment' &&
+        incoming().createdAt == request.time &&
+        exists(/databases/$(database)/documents/products/$(incoming().productId));
+      allow update: if isValidId(orderId) && isSignedIn() && isValidOrder(incoming(), orderId) && (
+        isAdmin() || (
+          existing().userId == request.auth.uid &&
+          existing().status == 'awaiting_payment' &&
+          incoming().status == 'pending_approval' &&
+          incoming().userId == existing().userId &&
+          incoming().productId == existing().productId &&
+          incoming().amountInr == existing().amountInr &&
+          incoming().upiId == existing().upiId &&
+          incoming().createdAt == existing().createdAt &&
+          incoming().diff(existing()).affectedKeys().hasOnly(['status', 'utrNumber'])
+        )
+      );
+      allow delete: if false;
+    }
+  }
+}

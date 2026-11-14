@@ -1,0 +1,6 @@
+{
+  "name": "SubSplit",
+  "description": "Shared premium digital subscriptions with instant 5-minute UPI QR checkout, admin verification, and verified 3-part credential delivery.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
